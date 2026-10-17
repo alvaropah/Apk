@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>SOT Battery Tracker</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --accent: #10b981;
+    --blue: #3b82f6;
+    --amber: #f59e0b;
+    --danger: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+  body { background: var(--bg); color: var(--text); padding: 16px; padding-bottom: 40px; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .title { font-size: 1.25rem; font-weight: 700; }
+  .badge { padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; background: rgba(16,185,129,0.15); color: var(--accent); }
+  .perm-banner { background: rgba(245,158,11,0.15); border: 1px solid var(--amber); border-radius: 12px; padding: 14px; margin-bottom: 16px; display: none; }
+  .perm-banner h4 { color: var(--amber); margin-bottom: 6px; font-size: 0.95rem; }
+  .perm-banner p { font-size: 0.82rem; color: var(--text); margin-bottom: 10px; line-height: 1.4; }
+  .btn { background: var(--accent); color: #052e16; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 700; font-size: 0.85rem; cursor: pointer; width: 100%; }
+  .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); margin-top: 8px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+  .card-full { grid-column: span 2; }
+  .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .val { font-size: 1.55rem; font-weight: 800; }
+  .sub { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
+  .bar-wrap { height: 12px; background: #0f172a; border-radius: 999px; overflow: hidden; display: flex; margin: 12px 0 8px; }
+  .bar-sot { background: var(--blue); height: 100%; transition: width 0.3s; }
+  .bar-off { background: #475569; height: 100%; transition: width 0.3s; }
+  .app-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.88rem; }
+  .app-row:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="title">Batería & SOT</div>
+      <div id="unplugText" class="sub">Leyendo estado del sistema...</div>
+    </div>
+    <span id="statusBadge" class="badge">Activo</span>
+  </div>
+
+  <div id="permBanner" class="perm-banner">
+    <h4>Permiso de Acceso de Uso requerido</h4>
+    <p>Para leer las horas exactas de pantalla activa (SOT) desde que desconectaste el cargador, activa el permiso para esta app en Ajustes.</p>
+    <button class="btn" onclick="requestPerm()">Abrir Ajustes de Uso de Android</button>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Pantalla Activa (SOT)</div>
+      <div id="sotVal" class="val" style="color: var(--blue);">0h 00m</div>
+      <div id="sotPct" class="sub">0% del ciclo</div>
+    </div>
+    <div class="card">
+      <div class="label">Batería Actual</div>
+      <div id="batVal" class="val" style="color: var(--accent);">--%</div>
+      <div id="batDrop" class="sub">Desde --% al desconectar</div>
+    </div>
+
+    <div class="card card-full">
+      <div class="label">Distribución desde última desconexión</div>
+      <div id="totalCycleVal" style="font-size:1.1rem; font-weight:700;">0h 00m totales</div>
+      <div class="bar-wrap">
+        <div id="barSot" class="bar-sot" style="width: 50%;"></div>
+        <div id="barOff" class="bar-off" style="width: 50%;"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:var(--muted);">
+        <span id="legendSot">🔵 Pantalla encendida: 0m</span>
+        <span id="legendOff">⚪ Reposo: 0m</span>
+      </div>
+    </div>
+
+    <div class="card card-full">
+      <div class="label">Consumo estimado</div>
+      <div id="drainRate" class="val" style="font-size:1.2rem;">--% / hora de pantalla</div>
+      <div id="estRemaining" class="sub">Calculando proyección según tu ritmo...</div>
+    </div>
+
+    <div class="card card-full">
+      <div class="label">Apps más usadas desde desconexión</div>
+      <div id="appsList" style="margin-top:8px;">
+        <div class="sub">Sin datos registrados aún</div>
+      </div>
+    </div>
+  </div>
+
+  <button class="btn" onclick="refreshFromAndroid()">Actualizar métricas ahora</button>
+  <button class="btn btn-secondary" onclick="resetCycle()">Reiniciar ciclo manualmente ahora</button>
+
+<script>
+  function fmtMins(m) {
+    const total = Math.max(0, Math.round(m));
+    const h = Math.floor(total / 60);
+    const mins = total % 60;
+    return h + "h " + (mins < 10 ? "0" + mins : mins) + "m";
+  }
+
+  function requestPerm() {
+    if (window.AndroidBridge) {
+      window.AndroidBridge.openUsageSettings();
+    }
+  }
+
+  function resetCycle() {
+    if (window.AndroidBridge) {
+      const raw = window.AndroidBridge.resetCycleNow();
+      renderData(JSON.parse(raw));
+    }
+  }
+
+  function refreshFromAndroid() {
+    if (window.AndroidBridge) {
+      const raw = window.AndroidBridge.getBatteryDataJson();
+      renderData(JSON.parse(raw));
+    } else {
+      // Modo demostración si se abre fuera de la APK
+      renderData({
+        hasPermission: true,
+        unplugTimestamp: Date.now() - 5.5 * 3600 * 1000,
+        unplugBatteryLevel: 95,
+        currentBatteryLevel: 68,
+        isCharging: false,
+        totalCycleMinutes: 330,
+        sotMinutes: 145,
+        screenOffMinutes: 185,
+        topApps: [
+          { name: "YouTube", minutes: 52 },
+          { name: "Chrome", minutes: 34 },
+          { name: "WhatsApp", minutes: 28 }
+        ]
+      });
+    }
+  }
+
+  function renderData(d) {
+    document.getElementById("permBanner").style.display = d.hasPermission ? "none" : "block";
+    const unplugDate = new Date(d.unplugTimestamp);
+    const timeStr = unplugDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    document.getElementById("unplugText").textContent = "Desconectado a las " + timeStr + " (" + d.unplugBatteryLevel + "%)";
+
+    const badge = document.getElementById("statusBadge");
+    badge.textContent = d.isCharging ? "Cargando ⚡" : "Descargando";
+
+    document.getElementById("sotVal").textContent = fmtMins(d.sotMinutes);
+    const pct = d.totalCycleMinutes > 0 ? Math.round((d.sotMinutes / d.totalCycleMinutes) * 100) : 0;
+    document.getElementById("sotPct").textContent = pct + "% del tiempo total";
+
+    document.getElementById("batVal").textContent = d.currentBatteryLevel + "%";
+    const drop = Math.max(0, d.unplugBatteryLevel - d.currentBatteryLevel);
+    document.getElementById("batDrop").textContent = "-" + drop + "% desde desconexión (" + d.unplugBatteryLevel + "%)";
+
+    document.getElementById("totalCycleVal").textContent = fmtMins(d.totalCycleMinutes) + " desde desconexión";
+    document.getElementById("barSot").style.width = pct + "%";
+    document.getElementById("barOff").style.width = (100 - pct) + "%";
+    document.getElementById("legendSot").textContent = "🔵 Pantalla activa: " + fmtMins(d.sotMinutes);
+    document.getElementById("legendOff").textContent = "⚪ Reposo: " + fmtMins(d.screenOffMinutes);
+
+    const sotHours = d.sotMinutes / 60.0;
+    if (sotHours > 0.08 && drop > 0) {
+      const rate = (drop / sotHours).toFixed(1);
+      document.getElementById("drainRate").textContent = rate + "% por hora de pantalla";
+      const remHours = (d.currentBatteryLevel / (drop / sotHours));
+      document.getElementById("estRemaining").textContent = "Proyección restante aprox: " + fmtMins(remHours * 60) + " de SOT";
+    } else {
+      document.getElementById("drainRate").textContent = "Recopilando curva de descarga...";
+      document.getElementById("estRemaining").textContent = "Usa el dispositivo unos minutos para calcular el ritmo.";
+    }
+
+    const list = document.getElementById("appsList");
+    list.innerHTML = "";
+    if (d.topApps && d.topApps.length > 0) {
+      d.topApps.forEach(app => {
+        const row = document.createElement("div");
+        row.className = "app-row";
+        row.innerHTML = "<span>" + app.name + "</span><strong>" + fmtMins(app.minutes) + "</strong>";
+        list.appendChild(row);
+      });
+    } else {
+      list.innerHTML = '<div class="sub">No hay actividad de apps registrada en este ciclo todavía.</div>';
+    }
+  }
+
+  refreshFromAndroid();
+  setInterval(refreshFromAndroid, 15000);
+</script>
+</body>
+</html>
